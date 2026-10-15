@@ -5,9 +5,10 @@
 # Responsibility: define the layout, controls, and output slots.
 # All dynamic content gets rendered by callbacks in server.py.
 #
-# Layout: three columns (sidebar | map | right panel) inside a navset_tab
-# that will eventually hold the analytics tabs as well. For now only the
-# Live View tab exists.
+# Layout: the Today tab is table-first. A status strip and headline cards sit
+# above a ranked constituency table (left of centre) with a linked map
+# (right of centre); filters are in the left sidebar. Later phases add the
+# What changed, Briefings, Exposure history and Pipeline health tabs.
 # =============================================================================
 
 from shiny import ui
@@ -58,12 +59,23 @@ def matrix_filter() -> ui.Tag:
 # SIDEBAR (left column)
 # -----------------------------------------------------------------------------
 sidebar = ui.div(
-    ui.h6("Map layers"),
-    ui.input_checkbox("layer_polygons", "FGS risk polygons", value=True),
-    ui.input_checkbox("layer_ea_areas", "EA flood areas", value=True),
-    ui.input_checkbox("layer_constituencies", "Constituencies", value=False),
+    ui.h6("Constituency table"),
+    ui.input_select(
+        "min_rank",
+        "Show forecast risk of at least",
+        choices={"1": "Very Low", "2": "Low", "3": "Medium", "4": "High"},
+        selected="3",
+    ),
+    ui.input_checkbox("only_escalated", "Only escalated since last statement", value=False),
+    ui.tags.small("Constituencies with a warning or alert in force always show.",
+                  class_="text-muted d-block mb-2"),
 
-    ui.h6("Risk source", class_="mt-3"),
+    ui.h6("Map layers", class_="mt-3"),
+    ui.input_checkbox("layer_constituencies", "Constituencies (worst risk)", value=True),
+    ui.input_checkbox("layer_polygons", "FGS risk polygons", value=False),
+    ui.input_checkbox("layer_ea_areas", "Warnings and alerts in force", value=True),
+
+    ui.h6("Polygon source", class_="mt-3"),
     ui.input_checkbox("src_river",   "River", value=True),
     ui.input_checkbox("src_surface", "Surface", value=True),
     ui.input_checkbox("src_coastal", "Coastal", value=True),
@@ -71,7 +83,7 @@ sidebar = ui.div(
 
     matrix_filter(),
 
-    ui.h6("Intersection threshold", class_="mt-3"),
+    ui.h6("EA area intersection threshold", class_="mt-3"),
     ui.input_slider("intersect_threshold", "", min=0, max=100, value=25, post="%"),
 
     ui.h6("Forecast day", class_="mt-3"),
@@ -87,46 +99,54 @@ sidebar = ui.div(
 
 
 # -----------------------------------------------------------------------------
-# CENTRE PANEL (map and statement title)
+# STATUS STRIP (pipeline health, statement banner, headline cards)
 # -----------------------------------------------------------------------------
-centre = ui.div(
+def _card(output_id: str, label: str, accent: bool = False) -> ui.Tag:
+    return ui.div(
+        ui.div(ui.output_text(output_id), class_="stat-num accent" if accent else "stat-num"),
+        ui.div(label, class_="stat-label"),
+        class_="stat-card",
+    )
+
+
+status_strip = ui.div(
+    ui.output_ui("health_strip"),
+    ui.output_ui("statement_banner"),
+    ui.div(
+        _card("card_medium_plus", "Constituencies at Medium or above", accent=True),
+        _card("card_escalated", "Escalated since last statement"),
+        _card("card_warnings", "With a warning in force"),
+        _card("card_alerts", "With a flood alert in force"),
+        class_="stat-row",
+    ),
+    class_="mb-3",
+)
+
+
+# -----------------------------------------------------------------------------
+# CENTRE (constituency table and detail)
+# -----------------------------------------------------------------------------
+table_panel = ui.div(
     ui.div(
         ui.h5(ui.output_text("map_title", inline=True)),
-        ui.tags.small(ui.output_text("map_subtitle", inline=True),
-                      class_="text-muted"),
-        class_="mb-3",
+        ui.tags.small(ui.output_text("map_subtitle", inline=True), class_="text-muted"),
+        class_="mb-2",
     ),
-    output_widget("live_map", height="500px"),
+    ui.output_data_frame("situation_table"),
+    ui.div(ui.output_ui("constituency_detail"), class_="panel-section mt-3"),
     class_="p-3",
 )
 
 
 # -----------------------------------------------------------------------------
-# RIGHT PANEL (EA area list + selected polygon detail)
+# RIGHT (map and the EA areas for the forecast day)
 # -----------------------------------------------------------------------------
-right_panel = ui.div(
+map_panel = ui.div(
+    output_widget("live_map", height="520px"),
     ui.div(
-        ui.div(
-            ui.div(ui.output_text("count_polygons"), class_="stat-num accent"),
-            ui.div("FGS polygons", class_="stat-label"),
-            class_="stat-card",
-        ),
-        ui.div(
-            ui.div(ui.output_text("count_ea_areas"), class_="stat-num"),
-            ui.div("EA areas affected", class_="stat-label"),
-            class_="stat-card mt-2",
-        ),
-        ui.div(
-            ui.div(ui.output_text("count_constituencies"), class_="stat-num"),
-            ui.div("Constituencies", class_="stat-label"),
-            class_="stat-card mt-2",
-        ),
-        class_="mb-3",
-    ),
-    ui.div(
-        ui.h6("EA areas affected", class_="panel-h"),
+        ui.h6("EA areas affected by the forecast", class_="panel-h"),
         ui.output_ui("ea_area_list"),
-        class_="panel-section",
+        class_="panel-section mt-3",
     ),
     class_="p-3",
 )
@@ -153,6 +173,28 @@ body { background: #f8f9fa; font-size: 14px; }
   font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em;
   color: #6c757d; margin-top: 4px;
 }
+.stat-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.health-strip {
+  display: flex; gap: 12px; align-items: center; padding: 6px 12px;
+  border-radius: 4px; font-size: 12px; margin-bottom: 8px;
+}
+.health-strip.ok   { background: #e6f4ea; color: #1e5a2e; }
+.health-strip.info { background: #e7f1fa; color: #1c4a73; }
+.health-strip.warn { background: #fff4d6; color: #7a5a00; }
+.health-strip.fail { background: #fbe4e4; color: #8a1c1c; }
+.banner {
+  padding: 8px 12px; border-radius: 4px; font-size: 13px; margin-bottom: 8px;
+  background: #fff4d6; color: #7a5a00; border: 1px solid #f0d890;
+}
+.rank-chip {
+  display: inline-block; min-width: 22px; text-align: center; border-radius: 3px;
+  padding: 0 4px; font-size: 11px; font-weight: 600; color: #212529;
+}
+.rank-0 { background: #e9ecef; color: #6c757d; }
+.rank-1 { background: #4f9d4f; color: #fff; }
+.rank-2 { background: #f0d040; }
+.rank-3 { background: #e08020; color: #fff; }
+.rank-4 { background: #b02020; color: #fff; }
 .panel-section {
   background: #fff; border: 1px solid #dee2e6; border-radius: 4px;
   padding: 14px; margin-bottom: 12px;
@@ -176,11 +218,11 @@ body { background: #f8f9fa; font-size: 14px; }
 
 /* Risk matrix grid */
 .risk-matrix-grid {
-  display: grid; grid-template-columns: repeat(4, 1fr);
-  gap: 2px; margin-bottom: 4px;
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 2px; margin-bottom: 4px; max-width: 160px;
 }
 .matrix-cell {
-  aspect-ratio: 1; position: relative;
+  aspect-ratio: 1; position: relative; min-width: 0; overflow: hidden;
   display: flex; align-items: center; justify-content: center;
 }
 .matrix-cell .form-check {
@@ -206,19 +248,16 @@ app_ui = ui.page_fluid(
     ui.tags.style(custom_css),
     ui.navset_tab(
         ui.nav_panel(
-            "Live view",
+            "Today",
+            status_strip,
             ui.row(
                 ui.column(2, sidebar),
-                ui.column(7, centre),
-                ui.column(3, right_panel),
+                ui.column(6, table_panel),
+                ui.column(4, map_panel),
             ),
         ),
-        # Analytics tabs added later. Placeholder kept so the navset renders.
-        ui.nav_panel("Warning issue times", ui.p("Coming soon.")),
-        ui.nav_panel("Forecast verification", ui.p("Coming soon.")),
-        ui.nav_panel("Event playback",       ui.p("Coming soon.")),
-        ui.nav_panel("Coverage gaps",        ui.p("Coming soon.")),
-        ui.nav_panel("MP audit log",         ui.p("Coming soon.")),
+        # Phase 2: What changed, Briefings. Phase 3: Exposure history,
+        # Pipeline health.
         id="main_tabs",
     ),
     title="FGS Flood Guidance",
